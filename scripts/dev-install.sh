@@ -56,6 +56,9 @@ if [ "$SKIP_BUILD" = "0" ]; then
     echo "==> cargo build --release (首次较慢, 之后增量)"
     (cd "$REPO_ROOT" && cargo build --release --bin jeikcode --bin jeikcode)
     [ -f "$EXE_ABS" ] || { echo "Error: build output missing: $EXE_ABS"; exit 1; }
+    if [ "$(uname -s)" = "Darwin" ]; then
+        codesign -s - -f "$EXE_ABS" 2>/dev/null || true
+    fi
 else
     [ -f "$EXE_ABS" ] || { echo "Error: no existing build at $EXE_ABS (run without --skip-build first)"; exit 1; }
 fi
@@ -71,8 +74,10 @@ export JEIKCODE_NO_UPDATE=1
 exec "$EXE_ABS" "\$@"
 EOF
 chmod +x "$WRAPPER"
-cp -f "$WRAPPER" "$PREFIX/jeikcode"
-chmod +x "$PREFIX/jeikcode"
+if [ "$WRAPPER" != "$PREFIX/jeikcode" ]; then
+    cp -f "$WRAPPER" "$PREFIX/jeikcode"
+    chmod +x "$PREFIX/jeikcode"
+fi
 
 echo "==> installed dev wrapper: $WRAPPER"
 echo "    alias: $PREFIX/jeikcode"

@@ -184,6 +184,9 @@ pub struct WriteApprovalGate {
     /// auto-approve with no prompt; sensitive paths still prompt every time. Defaults
     /// to a private always-false Arc for construction sites that have no mode concept.
     accept_edits: Arc<std::sync::atomic::AtomicBool>,
+    /// Plan-mode flag (SetMode(Plan)). While set, all mutating file operations
+    /// are hard-blocked without prompt or auto-approval.
+    plan_mode: Arc<std::sync::atomic::AtomicBool>,
     kind: String,
 }
 
@@ -194,6 +197,7 @@ impl WriteApprovalGate {
             store: Arc::new(InMemoryPermissionStore::new()),
             cwd,
             accept_edits: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            plan_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             kind: APPROVAL_KIND.to_string(),
         }
     }
@@ -209,6 +213,7 @@ impl WriteApprovalGate {
             store,
             cwd,
             accept_edits: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            plan_mode: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             kind: APPROVAL_KIND.to_string(),
         }
     }
@@ -218,6 +223,13 @@ impl WriteApprovalGate {
     /// constructors stay source-compatible.
     pub fn with_accept_edits(mut self, accept_edits: Arc<std::sync::atomic::AtomicBool>) -> Self {
         self.accept_edits = accept_edits;
+        self
+    }
+
+    /// Wire the shared plan-mode flag (from `CodingParts::plan_mode`). When
+    /// set, all file writes are hard-blocked with no approval prompt.
+    pub fn with_plan_mode(mut self, plan_mode: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.plan_mode = plan_mode;
         self
     }
 
@@ -278,6 +290,14 @@ impl ToolMiddleware for WriteApprovalGate {
         };
         if !is_write_tool(name) {
             return BeforeOutcome::Proceed; // not ours — defer to the normal flow
+        }
+
+        // Hard-block every file mutation tool when plan mode is active.
+        if self.plan_mode.load(std::sync::atomic::Ordering::Relaxed) {
+            return BeforeOutcome::deny(format!(
+                "plan mode is active — `{name}` would modify the workspace and is blocked. \
+                 Modifying files is strictly prohibited in plan mode."
+            ));
         }
 
         // Cheap raw-args sensitivity check (no cwd needed) — catches absolute / `~`-prefixed

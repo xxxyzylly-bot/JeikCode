@@ -5413,7 +5413,7 @@ impl Drop for TestIdleGuard {
 /// allowlisted commands (true, no `cd`-prefix hack), and — load-bearing — a
 /// single-quoted `'$(rm)'` stays a `raw_string` (SAFE literal) while a double-quoted
 /// `"$(rm)"` contains a `command_substitution` child that the walk rejects.
-pub(crate) fn is_read_only_bash(command: &str) -> bool {
+pub fn is_read_only_bash(command: &str) -> bool {
     let cmd = command.trim();
     if cmd.is_empty() {
         return false;

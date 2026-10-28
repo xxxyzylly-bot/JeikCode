@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use jeikcode_capabilities::tools::{
-    ApprovalRequest, PermissionDecision, PermissionStore, APPROVAL_KIND,
+    extract_shell_command, is_file_mutation_tool, is_read_only_bash, is_shell_tool_name,
+    task_has_worker, ApprovalRequest, PermissionDecision, PermissionStore, APPROVAL_KIND,
 };
 use jeikcode_kernel::hook::LifecycleHooks;
 use jeikcode_kernel::message::Conversation;
@@ -70,7 +71,10 @@ impl ToolMiddleware for PlanModeGate {
             return BeforeOutcome::Proceed;
         }
 
-        if call.name.starts_with("mcp__") {
+        let name = call.name.as_str();
+        let tool_name = tool.name();
+
+        if name.starts_with("mcp__") {
             // A server-declared read-only external query can't modify anything → proceed.
             // It is `Safe`, so the ApprovalMiddleware won't prompt for it either; a later
             // guard (e.g. SensitivePathGate) may still fire if the args touch a secret path,
@@ -110,9 +114,35 @@ impl ToolMiddleware for PlanModeGate {
             };
         }
 
-        // Built-in mutating tools (bash/edit/write) stay hard-blocked.
+        // 1. All file mutation tools (edit, write, etc.) are unconditionally hard-blocked in plan mode.
+        if is_file_mutation_tool(name) || is_file_mutation_tool(tool_name) {
+            return Self::blocked(name);
+        }
+
+        // 2. Shell tools (bash / run_command): only purely read-only commands (e.g. grep, ls, cat, find, git status)
+        // are allowed. Any command that might mutate files, use redirects (> / >>), or run scripts is hard-blocked.
+        if is_shell_tool_name(name) || is_shell_tool_name(tool_name) {
+            let command = extract_shell_command(&call.arguments).unwrap_or_default();
+            if !is_read_only_bash(&command) {
+                return BeforeOutcome::deny(format!(
+                    "plan mode is active — `{name}` would execute a mutating or non-readonly command and is blocked. Only read-only commands (e.g. grep, ls, cat, find, git status) are allowed in plan mode: explore and present a plan for the user to approve before making changes."
+                ));
+            }
+        }
+
+        // 3. Subagent task tool: worker subagents can edit files and are hard-blocked in plan mode.
+        if name.eq_ignore_ascii_case("task") || tool_name.eq_ignore_ascii_case("task") {
+            if task_has_worker(&call.arguments) {
+                return BeforeOutcome::deny(
+                    "plan mode is active — `task` with worker subagent(s) would modify the workspace and is blocked. Only explore subagents or read-only tools are allowed in plan mode."
+                        .to_string(),
+                );
+            }
+        }
+
+        // 4. Any other mutating tools whose risk is Risky stay hard-blocked.
         if tool.risk(&call.arguments) == RiskLevel::Risky {
-            return Self::blocked(&call.name);
+            return Self::blocked(name);
         }
         BeforeOutcome::Proceed
     }
@@ -355,6 +385,102 @@ mod tests {
             1,
             "idempotent: {:?}",
             convo.messages[1].text
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_mode_blocks_file_mutation_tools() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let gate = PlanModeGate::new(flag, grants());
+        let tool: Arc<dyn Tool> = Arc::new(EchoTool);
+
+        for name in &["edit", "edit_file", "write", "write_file", "create_file"] {
+            let mut call = ToolCall {
+                id: "c".into(),
+                name: (*name).into(),
+                arguments: r#"{"path":"test.rs","content":"foo"}"#.into(),
+            };
+            let out = gate.before(&mut call, &tool, &rt()).await;
+            assert!(
+                out.is_deny(),
+                "file mutation tool {name} must be blocked in plan mode"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_mode_blocks_mutating_bash_and_allows_readonly() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let gate = PlanModeGate::new(flag, grants());
+        let tool: Arc<dyn Tool> = Arc::new(EchoTool);
+
+        // Mutating bash commands
+        for cmd in &[
+            "echo hello > out.txt",
+            "sed -i 's/a/b/' foo.rs",
+            "touch newfile.txt",
+            "rm -f bar.txt",
+            "cargo build",
+        ] {
+            let mut call = ToolCall {
+                id: "c".into(),
+                name: "run_command".into(),
+                arguments: format!(r#"{{"command":"{cmd}"}}"#),
+            };
+            let out = gate.before(&mut call, &tool, &rt()).await;
+            assert!(
+                out.is_deny(),
+                "mutating bash `{cmd}` must be blocked in plan mode"
+            );
+        }
+
+        // Purely read-only bash commands
+        for cmd in &[
+            "ls -la",
+            "cat Cargo.toml",
+            "grep -rn 'foo' .",
+            "find . -name '*.rs'",
+            "pwd",
+        ] {
+            let mut call = ToolCall {
+                id: "c".into(),
+                name: "run_command".into(),
+                arguments: format!(r#"{{"command":"{cmd}"}}"#),
+            };
+            let out = gate.before(&mut call, &tool, &rt()).await;
+            assert!(
+                !out.is_deny(),
+                "read-only bash `{cmd}` must be allowed in plan mode, got: {out:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_mode_blocks_worker_subagent_task() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let gate = PlanModeGate::new(flag, grants());
+        let tool: Arc<dyn Tool> = Arc::new(EchoTool);
+
+        let mut worker_call = ToolCall {
+            id: "c".into(),
+            name: "task".into(),
+            arguments: r#"{"tasks":[{"description":"worker subtask","prompt":"modify foo","subagent_type":"worker","scope":["src/**"]}]}"#.into(),
+        };
+        let out = gate.before(&mut worker_call, &tool, &rt()).await;
+        assert!(
+            out.is_deny(),
+            "task with worker must be blocked in plan mode"
+        );
+
+        let mut explore_call = ToolCall {
+            id: "c".into(),
+            name: "task".into(),
+            arguments: r#"{"tasks":[{"description":"explore subtask","prompt":"search foo","subagent_type":"explore"}]}"#.into(),
+        };
+        let out = gate.before(&mut explore_call, &tool, &rt()).await;
+        assert!(
+            !out.is_deny(),
+            "task with only explore must be allowed in plan mode, got: {out:?}"
         );
     }
 }

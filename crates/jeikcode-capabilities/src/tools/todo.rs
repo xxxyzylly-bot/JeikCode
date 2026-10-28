@@ -478,9 +478,14 @@ fn apply_actions_batch(
     };
 
     if has_add || !seed_updates.is_empty() {
-        // 关键修复：中间状态打完所有勾时，todolist 必须完整保留；
-        // 若后续追加新任务（add），严格在既有清单末尾平滑追加，绝不断链清空！
-        // 只有显式 action="clear" 才会清空清单。
+        // Seamless handoff: when all existing tasks in the previous list are completed
+        // and a new batch of `add` actions arrives, start a fresh plan from id 1.
+        if !tmp.is_empty()
+            && tmp.iter().all(|t| t.status == TodoStatus::Completed)
+            && arr.iter().all(|item| action_kind(item) == Some("add"))
+        {
+            tmp.clear();
+        }
         if has_add {
             for item in arr {
                 if action_kind(item) == Some("add") {

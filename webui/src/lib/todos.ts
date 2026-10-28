@@ -172,18 +172,41 @@ function resolveUpdateId(
  */
 export function parseTodosFromOutput(output?: string | null): TodoItem[] | null {
   if (!output || typeof output !== 'string') return null;
+  const trimmed = output.trim();
+  if (
+    trimmed === '(no tasks)' ||
+    trimmed.toLowerCase().includes('all tasks cleared') ||
+    trimmed.toLowerCase().includes('no tasks provided')
+  ) {
+    return [];
+  }
   const lines = output.split('\n');
   const items: TodoItem[] = [];
-  const regex = /^\s*\[([ ~•√xXvV])\]\s*(\d+)\.\s*(.+)$/;
+  const regex = /^\s*(?:\*{1,2})?\[([ ~•\u2022\-\*√\u221a✓\u2713✔\u2714xXvV+])\](?:\*{1,2})?\s*(\d+)\.\s*(.+?)(?:\*{1,2})?$/;
   for (const line of lines) {
     const match = line.match(regex);
     if (match) {
-      const glyph = match[1];
+      const glyph = match[1]!;
       const content = normalizeTodoContent(match[3]!);
       if (!content) continue;
       let status: TodoStatus = 'pending';
-      if (glyph === '~' || glyph === '•') status = 'in_progress';
-      else if (glyph === '√' || glyph === 'x' || glyph === 'X' || glyph === 'v' || glyph === 'V') status = 'completed';
+      if (glyph === '~' || glyph === '•' || glyph === '\u2022' || glyph === '-' || glyph === '*') {
+        status = 'in_progress';
+      } else if (
+        glyph === '√' ||
+        glyph === '\u221a' ||
+        glyph === '✓' ||
+        glyph === '\u2713' ||
+        glyph === '✔' ||
+        glyph === '\u2714' ||
+        glyph === 'x' ||
+        glyph === 'X' ||
+        glyph === 'v' ||
+        glyph === 'V' ||
+        glyph === '+'
+      ) {
+        status = 'completed';
+      }
       items.push({ content, status });
     }
   }

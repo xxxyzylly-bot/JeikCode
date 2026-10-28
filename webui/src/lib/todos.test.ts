@@ -957,11 +957,13 @@ test('parseTodosFromOutput extracts authoritative numbered list across various g
 [~] 2. 任务二：正在进行
 [•] 3. 任务三：符号进行
 [√] 4. 任务四：打钩完成
-[x] 5. 任务五：字母完成
-[v] 6. 任务六：小写完成`;
+[✓] 5. 任务五：Unicode 对号完成
+[✔] 6. 任务六：粗体对号完成
+[x] 7. 任务七：字母完成
+[v] 8. 任务八：小写完成`;
 
   const parsed = parseTodosFromOutput(sample);
-  assert.equal(parsed?.length, 6);
+  assert.equal(parsed?.length, 8);
   assert.equal(parsed?.[0]?.status, 'pending');
   assert.equal(parsed?.[0]?.content, '任务一：待办事项');
   assert.equal(parsed?.[1]?.status, 'in_progress');
@@ -969,6 +971,12 @@ test('parseTodosFromOutput extracts authoritative numbered list across various g
   assert.equal(parsed?.[3]?.status, 'completed');
   assert.equal(parsed?.[4]?.status, 'completed');
   assert.equal(parsed?.[5]?.status, 'completed');
+  assert.equal(parsed?.[6]?.status, 'completed');
+  assert.equal(parsed?.[7]?.status, 'completed');
+
+  assert.deepEqual(parseTodosFromOutput('(no tasks)'), []);
+  assert.deepEqual(parseTodosFromOutput('all tasks cleared'), []);
+  assert.deepEqual(parseTodosFromOutput('All tasks cleared successfully.'), []);
 });
 
 test('archived tool output does not resurrect the live panel', () => {

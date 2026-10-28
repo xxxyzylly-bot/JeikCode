@@ -1514,7 +1514,8 @@ pub fn assemble(
                 parts.shared_cwd.clone(),
                 parts.write_approval_grants.clone(),
             )
-            .with_accept_edits(parts.accept_edits.clone()),
+            .with_accept_edits(parts.accept_edits.clone())
+            .with_plan_mode(parts.plan_mode.clone()),
         ))
         // Workspace-aware approval for DESTRUCTIVE bash (rm/mv/cp/dd/redirect…) whose target
         // lands OUTSIDE the workspace: prompt with a per-directory "Always", mirroring

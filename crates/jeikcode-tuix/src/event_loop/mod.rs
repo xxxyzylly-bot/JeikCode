@@ -21031,6 +21031,12 @@ fn handle_agent_event(
             // matching lines and is a no-op).
             if is_todo_tool_name(&name) {
                 parse_todo_titles_into(&mut state.todo_titles, &output);
+                if let Some(progress) = todo_progress_from_board(&ctx.current_session.id) {
+                    state.active_todos = Some(progress);
+                } else if output.contains("(no tasks)") || output.to_lowercase().contains("all tasks cleared") {
+                    state.active_todos = None;
+                }
+                sync_todo_titles(state);
             }
             // If this call belongs to an active batch, the group header
             // already accounts for it; emit a single-line `  ↳ ✓ / ✗`
@@ -24954,7 +24960,7 @@ pub(crate) fn sync_todo_titles(state: &mut crate::state::UiState) {
 /// `todo update` while the panel is empty is a no-op (unknown id); a `todo add` from empty
 /// creates the panel.
 pub(crate) fn patch_live_todos_from_action(state: &mut crate::state::UiState, args: &str) {
-    use jeikcode_capabilities::tools::todo::{apply_todo_action, TodoItem};
+    use jeikcode_capabilities::tools::todo::{apply_todo_action, todo_action_kind, TodoItem, TodoStatus};
     let mut items: Vec<TodoItem> = state
         .active_todos
         .as_ref()
@@ -24968,6 +24974,17 @@ pub(crate) fn patch_live_todos_from_action(state: &mut crate::state::UiState, ar
                 .collect()
         })
         .unwrap_or_default();
+    // Seamless handoff: 如果现有任务全部已完成，新来的纯 add 动作重置清单从 1 开始
+    if !items.is_empty() && items.iter().all(|t| t.status == TodoStatus::Completed) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(args) {
+            let only_adds = v.get("actions").and_then(|a| a.as_array()).map_or(false, |arr| {
+                !arr.is_empty() && arr.iter().all(|it| todo_action_kind(it) == Some("add"))
+            });
+            if only_adds {
+                items.clear();
+            }
+        }
+    }
     apply_todo_action(&mut items, args);
     state.active_todos = if items.is_empty() {
         None

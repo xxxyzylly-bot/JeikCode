@@ -5450,6 +5450,11 @@ export function Chat({
           targetSid,
           reduceLiveTodo(liveTodoDoc(targetSid), { type: 'result', callId: event.id, items: fromOutput }),
         );
+      } else if (fromOutput && fromOutput.length === 0) {
+        writeLiveTodo(
+          targetSid,
+          reduceLiveTodo(liveTodoDoc(targetSid), { type: 'clear' }),
+        );
       }
     } else if (event.type === 'tool_start' && isTodoTool(event.name)) {
       const argsStr = formatArgs(event.arguments);
@@ -5488,12 +5493,14 @@ export function Chat({
             const parts = m.parts.map((p) => {
               if (p.kind === 'tool' && p.tool?.id === toolId) {
                 if (event.type === 'tool_result') {
+                  const nextSubtasks = event.name === 'task' ? applySubtaskResultsFromOutput(p.tool.subtasks, event.output) : undefined;
                   return {
                     ...p,
                     tool: {
                       ...p.tool,
                       status: toolResultStatus(event.success, event.output, event.name),
                       output: event.output,
+                      ...(nextSubtasks ? { subtasks: nextSubtasks } : {}),
                     },
                   };
                 }
@@ -5948,11 +5955,27 @@ export function Chat({
         break;
 
       case 'tool_result': {
+        let nextSubtasks: import('../lib/subtasks').SubtaskItem[] | undefined;
+        if (event.name === 'task') {
+          let existingSubtasks: import('../lib/subtasks').SubtaskItem[] | undefined;
+          for (let i = messagesRef.current.length - 1; i >= 0; i--) {
+            const m = messagesRef.current[i];
+            if (m.role === 'assistant' && m.parts) {
+              const tp = m.parts.find((p) => p.kind === 'tool' && 'tool' in p && p.tool?.id === event.id);
+              if (tp && 'tool' in tp && tp.tool?.subtasks) {
+                existingSubtasks = tp.tool.subtasks;
+                break;
+              }
+            }
+          }
+          nextSubtasks = applySubtaskResultsFromOutput(existingSubtasks, event.output);
+        }
         updateToolInLastAssistant(event.id, {
           status: toolResultStatus(event.success, event.output, event.name),
           duration_ms: event.duration_ms,
           output: event.output,
           progress: undefined,
+          ...(nextSubtasks ? { subtasks: nextSubtasks } : {}),
         });
         if (isTodoTool(event.name)) {
           const authoritativeFromOutput = parseTodosFromOutput(event.output);
@@ -5965,6 +5988,14 @@ export function Chat({
                 items: authoritativeFromOutput,
               }),
             );
+          } else if (authoritativeFromOutput && authoritativeFromOutput.length === 0) {
+            writeLiveTodo(
+              activeIdRef.current,
+              reduceLiveTodo(liveTodoDoc(activeIdRef.current), {
+                type: 'clear',
+              }),
+            );
+            applySessionStickyTodos(activeIdRef.current, null);
           } else {
             // 兜底回退：若输出中没有标准清单格式，再使用本地折叠
             let foundToolPart: ToolRow | undefined;
@@ -5980,18 +6011,9 @@ export function Chat({
             }
             if (foundToolPart?.args) {
               const toolArgs = foundToolPart.args;
-              const appliedIds = appliedTodoIdsFor(activeIdRef.current);
               setActiveTodos((cur) => {
-                const next = foldLiveTodo({
-                  state: cur,
-                  remembered: activeTodosRef.current,
-                  name: event.name,
-                  args: toolArgs,
-                  callId: event.id,
-                  appliedIds,
-                });
-                // 折叠消费了 callId → 立即落盘，刷新后仍能挡住同一帧的重放。
-                persistAppliedTodoIds();
+                const base = todoBaselineForLiveApply(cur, activeTodosRef.current);
+                const next = foldTodoToolCall(base, event.name, toolArgs);
                 const sid = activeIdRef.current;
                 const doc = reduceLiveTodo(
                   liveTodoDoc(sid),

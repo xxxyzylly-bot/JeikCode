@@ -76,8 +76,8 @@ pub use approval::{
 };
 pub use ast_grep::AstGrepTool;
 pub use bash::{
-    bash_invocations, normalize_command_for_grant, run_shell, BashInvocation, BashTool, ShellExit,
-    ShellOutcome,
+    bash_invocations, is_read_only_bash, normalize_command_for_grant, run_shell, BashInvocation,
+    BashTool, ShellExit, ShellOutcome,
 };
 pub use bash_ctl::LongBashKeywordActionsTool;
 pub use bash_log::{cleanup_session_logs, BackgroundLogWriter};
@@ -95,7 +95,7 @@ pub use read::ReadFileTool;
 pub use repair::{repair_tool_args, RepairToolArgsMiddleware};
 pub use report_finding::{Finding, ReportFindingTool};
 pub use sensitive_path::{path_is_sensitive, references_sensitive_path, SensitivePathGate};
-pub use task::TaskTool;
+pub use task::{task_has_worker, TaskTool};
 pub use todo::{
     bind_todo_session, bind_todowrite, clear_todo_board, close_todo_board_if_complete,
     commit_todo_board, derive_current_todos, is_todo_tool_name, read_todo_board,

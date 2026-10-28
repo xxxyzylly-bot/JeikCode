@@ -433,7 +433,8 @@ impl Tool for TaskTool {
         // Safe, which would let a file-editing worker skip the approval gate).
         match parse_task_args(args) {
             Ok(a) if a.tasks.iter().any(|t| t.is_worker()) => RiskLevel::Risky,
-            _ => RiskLevel::Safe,
+            Ok(_) => RiskLevel::Safe,
+            Err(_) => RiskLevel::Risky,
         }
     }
 
@@ -731,6 +732,15 @@ fn parse_task_args(args: &str) -> Result<Args, serde_json::Error> {
         }
     }
     serde_json::from_value(value)
+}
+
+/// Returns true if the task arguments declare at least one `worker` subagent,
+/// or if parsing fails (fail-closed).
+pub fn task_has_worker(args: &str) -> bool {
+    match parse_task_args(args) {
+        Ok(a) => a.tasks.iter().any(|t| t.is_worker()),
+        Err(_) => true,
+    }
 }
 
 /// A one-line preview of what a child is about to do this round — the tool name plus a
